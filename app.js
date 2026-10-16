@@ -17,7 +17,7 @@
     { key: 'detect', name: '한자어 탐정', icon: 'i-magnifier',
       rule: ['장면마다 한자어가 4개씩 숨어 있어요.', '한자어만 콕! 눌러요.', '순우리말·외래어는 누르면 안 돼요.'] },
     { key: 'write', name: '따라 읽고 쓰기', icon: 'i-pencil',
-      rule: ['소리를 듣고 큰 소리로 따라 말해요.', '손가락으로 연한 글자를 따라 써요.', '다 쓰면 「다 썼어요!」'] },
+      rule: ['소리를 듣고 큰 소리로 따라 말해요.', '획순대로 한 획씩 따라 써요. 순서가 틀리면 다시!', '모르면 「획순 보기」를 눌러요.'] },
     { key: 'react', name: '1초 반응', icon: 'i-bolt',
       rule: ['중국어 질문을 들어요.', '그림을 보고 대답을 빨리 골라요.', '3초 안에 고르면 「툭!」'] }
   ];
@@ -85,7 +85,7 @@
 
   /* ───────── 확대·스크롤 막기 ───────── */
   ['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
-  document.addEventListener('touchmove', e => { if (!e.target.closest('canvas')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if (!e.target.closest('canvas, .hw-box')) e.preventDefault(); }, { passive: false });
   document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
   document.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
   document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && ['+', '-', '=', '0'].includes(e.key)) e.preventDefault(); });
@@ -513,17 +513,26 @@
     scene();
   };
 
-  /* ═════════ 미션 4. 따라 읽고 쓰기 ═════════ */
+  /* ═════════ 미션 4. 따라 읽고 쓰기 (획순 채점) ═════════
+   * Hanzi Writer(lib/hanzi-writer.js)로 한 획씩 채점: 순서·방향이 맞는 획만 인정
+   * 글자 데이터는 hanzi/<유니코드>.json (저장소 안에 들어 있어 인터넷이 불안정해도 동작)
+   */
+  const HW_OK = () => typeof window.HanziWriter === 'function';
+  function hwLoader(ch, onLoad, onError) {
+    fetch('hanzi/' + ch.codePointAt(0).toString(16).toUpperCase() + '.json')
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(onLoad).catch(onError);
+  }
   RUN.write = function (L) {
     newScreen(); setTheme(L); missionHeader(L, 'write');
     const items = L.words;
-    let i = 0;
+    let i = 0, miss = 0;
     function listen() {
       setProg(`따라 읽고 쓰기 ${i}/${items.length}`, i / items.length);
-      if (i >= items.length) return finish(L, 'write', 0, esc(L.wordTip).replace(/([一-鿿。？]+)/g, '<span class="zh">$1</span>'));
+      if (i >= items.length) return finish(L, 'write', miss, esc(L.wordTip).replace(/([一-鿿。？]+)/g, '<span class="zh">$1</span>'));
       const it = items[i];
       render(`<section class="screen play">
-        <div class="stepper"><span class="on">① 듣고 따라 말하기</span><span>② 따라 쓰기</span></div>
+        <div class="stepper"><span class="on">① 듣고 따라 말하기</span><span>② 획순대로 쓰기</span></div>
         <div class="say-zone">
           <div><div class="zh">${it.zh}</div><div class="py">${it.py}</div><div class="hint">${esc(it.ko)}</div></div>
           <button class="big-speaker" style="width:min(6.5rem,28vw);height:min(6.5rem,28vw)" data-act="play">${ic('u-speaker')}</button>
@@ -538,75 +547,94 @@
       later(() => { sb.disabled = false; }, 4000);
       ACT.said = () => { fx('ok'); trace(it); };
     }
+
     function trace(it) {
       const chars = [...it.zh];
-      render(`<section class="screen play">
-        <div class="stepper"><span class="done">① 듣고 따라 말하기</span><span class="on">② 따라 쓰기</span></div>
-        <div class="wcard"><span class="zh">${it.zh}</span><span class="meta"><span class="py">${it.py}</span><span class="ko">${esc(it.ko)}</span></span>
+      let ci = 0, writer = null, busy = false, strokes = 0, done = 0, mistakes = 0;
+      render(`<section class="screen play writing">
+        <div class="wcard"><span class="chips" id="chips">${chars.map((c, n) => `<span class="chip zh" data-n="${n}">${c}</span>`).join('')}</span>
+          <span class="meta"><span class="py">${it.py}</span><span class="ko">${esc(it.ko)}</span></span>
           <button class="say" data-act="play">${ic('u-speaker')}</button></div>
-        <div class="canvas-wrap" id="cw"><canvas id="cv"></canvas></div>
-        <div class="tools"><button class="btn white" data-act="erase">${ic('u-erase')} 다시</button>
-          <button class="btn big" data-act="ok" id="okBtn" disabled>다 썼어요!</button></div>
+        <div class="hw-wrap" id="hww"><div class="hw-box" id="hw"></div></div>
+        <div class="hw-status" id="hst">순서대로 한 획씩 써요</div>
+        <div class="tools"><button class="btn white" data-act="redo">${ic('u-erase')} 다시</button>
+          <button class="btn show-order" data-act="order" id="ordBtn">${ic('i-pencil')} 획순 보기</button></div>
       </section>`);
       ACT.play = () => TTS.speak(it.zh);
-      const cw = $('#cw'), cv = $('#cv'), okBtn = $('#okBtn');
-      const ctx = cv.getContext('2d');
-      let box = 100, ink = 0, drawing = false, last = null;
-      const need = () => chars.length * box * .6;
-      function paperDraw() {
-        const r = cw.getBoundingClientRect();
-        const gap = 0;
-        box = Math.floor(Math.min((r.width - gap) / chars.length, r.height - 6, 340));
-        const W = box * chars.length, H = box, dpr = Math.min(window.devicePixelRatio || 1, 3);
-        cv.style.width = W + 'px'; cv.style.height = H + 'px';
-        cv.width = W * dpr; cv.height = H * dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, W, H);
-        chars.forEach((ch, n) => {
-          const x = n * box;
-          ctx.save();
-          ctx.strokeStyle = '#F4B9B9'; ctx.lineWidth = 2; ctx.setLineDash([]);
-          if (n > 0) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-          ctx.setLineDash([6, 6]); ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.moveTo(x + box / 2, 6); ctx.lineTo(x + box / 2, H - 6);
-          ctx.moveTo(x + 6, H / 2); ctx.lineTo(x + box - 6, H / 2); ctx.stroke();
-          ctx.restore();
-          ctx.fillStyle = '#E6DED2';
-          ctx.font = `700 ${Math.round(box * .76)}px 'Noto Sans SC','PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif`;
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText(ch, x + box / 2, H / 2 + box * .03);
-        });
-        ink = 0; okBtn.disabled = true;
+      const wrap = $('#hww'), box = $('#hw'), st = $('#hst'), ordBtn = $('#ordBtn');
+      const say = (msg, cls = '') => { st.className = 'hw-status ' + cls; st.innerHTML = msg; };
+      const size = () => { const r = wrap.getBoundingClientRect(); return Math.max(140, Math.floor(Math.min(r.width, r.height, 680)) - 8); };
+      const countText = () => `획 <b>${done}</b> / ${strokes}`;
+
+      if (!HW_OK()) { say('획순 프로그램을 불러오지 못했어요. 새로고침해 주세요.', 'bad'); return; }
+
+      function chips() {
+        document.querySelectorAll('#chips .chip').forEach((c, n) => { c.classList.toggle('on', n === ci); c.classList.toggle('ok', n < ci); });
       }
-      const fontReady = document.fonts && document.fonts.load
-        ? Promise.race([document.fonts.load(`700 60px 'Noto Sans SC'`, it.zh), new Promise(r => setTimeout(r, 1500))])
-        : Promise.resolve();
-      fontReady.then(guard(paperDraw));
-      paperDraw();
-      const pos = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-      cv.addEventListener('pointerdown', e => {
-        e.preventDefault(); drawing = true; last = pos(e); cv.setPointerCapture(e.pointerId);
-        ctx.fillStyle = L.color; ctx.beginPath(); ctx.arc(last[0], last[1], box * .04, 0, 7); ctx.fill();
-      });
-      cv.addEventListener('pointermove', e => {
-        if (!drawing) return;
-        const p = pos(e);
-        ctx.strokeStyle = L.color; ctx.lineWidth = box * .08; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-        ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
-        ink += Math.hypot(p[0] - last[0], p[1] - last[1]); last = p;
-        if (ink >= need() && okBtn.disabled) { okBtn.disabled = false; fx('tap'); }
-      });
-      const up = () => { drawing = false; };
-      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up); cv.addEventListener('pointerleave', up);
-      ACT.erase = () => { fx('tap'); paperDraw(); };
-      ACT.ok = () => {
-        fx('ok'); TTS.speak(it.zh);
-        okBtn.disabled = true;
-        i++; later(listen, 900);
+      function startQuiz() {
+        if (!writer) return;
+        done = 0; busy = false; ordBtn.disabled = false;
+        writer.hideCharacter(); writer.showOutline();
+        say(`${countText()} · 순서대로 한 획씩 써요`);
+        writer.quiz({
+          leniency: 1.25, showHintAfterMisses: 2, highlightOnComplete: true, acceptBackwardsStrokes: false,
+          onCorrectStroke: guard(d => {
+            done = d.strokeNum + 1; fx('tap');
+            say(d.strokesRemaining ? `${countText()} · 잘했어요!` : `${countText()}`, 'good');
+          }),
+          onMistake: guard(d => {
+            mistakes++; fx('no');
+            const msg = d.isBackwards ? '방향이 반대예요! 처음 쓰는 곳부터 그어요.'
+              : d.mistakesOnStroke >= 2 ? '반짝이는 획을 따라 써 봐요!'
+              : '순서가 달라요! 다음 획을 찾아봐요.';
+            say(`${countText()} · ${msg}`, 'bad');
+          }),
+          onComplete: guard(sum => {
+            if (sum.totalMistakes >= 3) miss++;
+            fx('ok'); say(`<b>${chars[ci]}</b> 합격! ${sum.totalMistakes === 0 ? '완벽해요!' : ''}`, 'good');
+            ordBtn.disabled = true;
+            later(nextChar, 1100);
+          })
+        });
+      }
+      function load() {
+        chips();
+        box.innerHTML = '';
+        const s = size();
+        box.style.width = box.style.height = s + 'px';
+        say('글자를 불러오는 중…');
+        writer = HanziWriter.create(box, chars[ci], {
+          width: s, height: s, padding: Math.round(s * .07),
+          charDataLoader: hwLoader,
+          showCharacter: false, showOutline: true,
+          strokeColor: '#3B3355', outlineColor: '#E6DDD0', drawingColor: L.deep,
+          highlightColor: '#FFC93C', highlightCompleteColor: L.color, radicalColor: null,
+          drawingWidth: Math.max(14, Math.round(s / 18)),
+          strokeAnimationSpeed: 1.3, delayBetweenStrokes: 350, strokeHighlightSpeed: 1.5,
+          onLoadCharDataSuccess: guard(data => { strokes = data.strokes.length; startQuiz(); }),
+          onLoadCharDataError: guard(() => say('글자 정보를 불러오지 못했어요.', 'bad'))
+        });
+      }
+      function nextChar() {
+        ci++;
+        if (ci < chars.length) return load();
+        chips(); TTS.speak(it.zh);
+        say(`<b>${it.zh}</b> 다 썼어요!`, 'good');
+        i++; later(listen, 1200);
+      }
+      ACT.order = () => {
+        if (!writer || busy) return;
+        busy = true; ordBtn.disabled = true; fx('tap');
+        say('획순을 잘 보세요!', '');
+        writer.cancelQuiz();
+        writer.hideCharacter({ duration: 0 });
+        writer.animateCharacter({ onComplete: guard(() => later(() => { writer.hideCharacter(); startQuiz(); }, 600)) });
       };
-      const onResize = guard(() => paperDraw());
+      ACT.redo = () => { if (!writer || busy) return; fx('tap'); writer.cancelQuiz(); startQuiz(); };
+      const onResize = guard(() => { if (!writer) return; const s = size(); box.style.width = box.style.height = s + 'px'; writer.updateDimensions({ width: s, height: s, padding: Math.round(s * .07) }); });
       window.addEventListener('resize', onResize);
       const t = token; const off = setInterval(() => { if (t !== token) { window.removeEventListener('resize', onResize); clearInterval(off); } }, 1000);
+      load();
     }
     listen();
   };

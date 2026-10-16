@@ -358,3 +358,29 @@ svg{display:block}
   .foot{display:none}
 }
 .sheet .row .btn{white-space:nowrap;font-size:1.35rem;padding:.8rem .6rem}
+
+/* ───────── 획순 쓰기 (Hanzi Writer) ───────── */
+.chips{display:flex;gap:.35rem;flex:none}
+.chip{width:2.7rem;height:2.7rem;border-radius:.8rem;display:grid;place-items:center;font-size:1.6rem;background:var(--bg);color:#B9AE9E;border:.15rem solid var(--line2)}
+.chip.on{background:var(--c);color:#fff;border-color:var(--deep);box-shadow:0 .18rem 0 var(--deep)}
+.chip.ok{background:var(--soft);color:var(--deep);border-color:var(--soft)}
+.hw-wrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+.hw-box{position:relative;background-color:#fff;border-radius:1.2rem;border:.22rem solid #F2B8B8;box-shadow:0 .3rem 0 var(--line2);touch-action:none;overflow:hidden;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cpath d='M50 0V100M0 50H100M0 0L100 100M100 0L0 100' stroke='%23F6C9C9' stroke-width='.6' stroke-dasharray='2.5 2.5' fill='none' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+  background-size:100% 100%}
+.hw-box svg{display:block}
+.hw-status{flex:none;text-align:center;font-size:1.1rem;color:var(--sub);min-height:1.5rem;line-height:1.5rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hw-status b{font-weight:400;color:var(--ink)}
+.hw-status.good{color:var(--mint-d)}
+.hw-status.bad{color:var(--red);animation:shake .4s}
+.tools .show-order{flex:1.4}
+/* 쓰기 화면: 칸을 최대한 크게 */
+.screen.writing{gap:.5rem;padding:.2rem .5rem .6rem;max-width:44rem}
+.writing .wcard{padding:.35rem .8rem;gap:.7rem}
+.writing .wcard .meta .py,.writing .wcard .meta .ko{font-size:1rem}
+.writing .wcard .say{width:2.6rem;height:2.6rem}
+.writing .chip{width:2.4rem;height:2.4rem;font-size:1.4rem}
+.writing .hw-box{border-radius:1rem}
+.writing .hw-status{font-size:1rem;min-height:1.3rem;line-height:1.3rem}
+.writing .tools .btn{padding:.6rem 1rem;font-size:1.2rem}
+.hw-box{box-sizing:content-box}
