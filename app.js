@@ -70,7 +70,7 @@
   /* ───────── 클릭 처리 (한 곳에서) ───────── */
   let ACT = {}, MACT = {};
   const GLOBAL = {
-    sound() { S.sound = !S.sound; save(); if (!S.sound && 'speechSynthesis' in window) speechSynthesis.cancel(); renderSoundBtn(); fx('tap'); },
+    sound() { S.sound = !S.sound; save(); if (!S.sound && 'speechSynthesis' in window) speechSynthesis.cancel(); renderSoundBtn(); fx('tap'); toast(S.sound ? '소리 켜짐' : '소리 꺼짐 (다시 누르면 켜져요)'); if (S.sound) TTS.speak('你好'); },
     home() { fx('tap'); showHome(); },
     gear() { fx('tap'); askPin(() => teacherMenu()); }
   };
@@ -126,23 +126,48 @@
       const zh = vs.filter(v => /^(zh[-_](CN|Hans)|cmn)/i.test(v.lang));
       const any = vs.filter(v => /^zh/i.test(v.lang));
       const fem = /(Tingting|Ting-Ting|Xiaoxiao|Xiaoyi|Xiaohan|Huihui|Yaoyao|Lili|Shanshan|female|女)/i;
-      this.voice = zh.find(v => fem.test(v.name) && v.localService) || zh.find(v => fem.test(v.name))
+      // 엣지 자연 음성(Xiaoxiao Online) → 여성 음성 → 구글 중국어 → 아무 중국어
+      this.voice = zh.find(v => /Natural|Online/i.test(v.name) && fem.test(v.name)) || zh.find(v => fem.test(v.name))
         || zh.find(v => /Google/i.test(v.name)) || zh[0] || any[0] || null;
+      this.count = vs.length;
     },
+    count: 0, cur: null, warned: false,
     speak(text, onend, rate = .8) {
       const fin = onend ? guard(onend) : null;
       if (!('speechSynthesis' in window) || !S.sound) { if (fin) later(fin, 400); return; }
-      speechSynthesis.cancel();
+      if (!this.voice) this.pick();
+      if (this.count && !this.voice) noVoiceHelp();
+      const ss = speechSynthesis;
+      ss.cancel();
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN'; if (this.voice) u.voice = this.voice; u.rate = rate; u.pitch = 1.05;
+      u.lang = 'zh-CN'; u.rate = rate; u.pitch = 1.05;
+      try { if (this.voice) u.voice = this.voice; } catch (e) { this.voice = null; }
+      this.cur = u; // 크롬: 참조가 없으면 소리가 중간에 사라지는 문제 방지
       let done = false;
       const end = () => { if (done) return; done = true; document.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); if (fin) fin(); };
-      u.onend = end; u.onerror = end;
+      u.onend = end;
+      u.onerror = e => { if (e && e.error === 'not-allowed') toast('화면을 한 번 누르면 소리가 나요!'); end(); };
       later(end, 1500 + text.length * 520);
-      speechSynthesis.speak(u);
+      // 크롬 데스크톱: cancel 직후 바로 speak 하면 소리가 씹히는 문제 → 잠깐 쉬고 말하기
+      const tk = token;
+      setTimeout(() => { if (tk !== token) return; try { ss.resume(); ss.speak(u); } catch (e) { end(); } }, 60);
     }
   };
-  if ('speechSynthesis' in window) { TTS.pick(); speechSynthesis.onvoiceschanged = () => TTS.pick(); }
+  if ('speechSynthesis' in window) {
+    TTS.pick();
+    if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', () => TTS.pick());
+    else speechSynthesis.onvoiceschanged = () => TTS.pick();
+  }
+  function noVoiceHelp() {
+    if (TTS.warned) return; TTS.warned = true;
+    const win = /Windows/i.test(navigator.userAgent);
+    openModal(`<div class="ic">${ic('u-speaker')}</div><h2>중국어 목소리가 없어요</h2>
+      <p>이 기기·브라우저에는 중국어 음성이 없어서<br>소리가 나지 않아요.</p>
+      <div class="tipbox">${win
+        ? '① <b>크롬</b>이나 <b>엣지</b>로 열어 주세요. (가장 쉬워요)<br>② 또는 윈도우 <b>설정 → 시간 및 언어 → 언어</b>에서 <b>중국어(간체, 중국)</b>를 추가하고 음성을 받아 주세요.'
+        : '<b>크롬</b>이나 <b>사파리</b>로 열어 주세요.<br>그래도 안 되면 기기 설정에서 중국어 음성을 받아 주세요.'}</div>
+      <button class="btn big" data-act="x">알겠어요</button>`, { x: closeModal, _outside: closeModal });
+  }
   function speakBtn(btn, text, onend) { if (btn) btn.classList.add('playing'); TTS.speak(text, onend); }
 
   /* 중국어 글꼴: 게임에 나오는 글자만 골라서 가볍게 불러오기 */
@@ -198,7 +223,10 @@
   }
   function unlockSpeech() {
     audio();
-    if ('speechSynthesis' in window) { try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) {} }
+    // 아이폰·아이패드: 첫 소리는 손가락 터치 순간에 한 번 내야 이후 소리가 남 (조용한 '。' 한 번)
+    if (unlockSpeech.done || !('speechSynthesis' in window)) return;
+    unlockSpeech.done = true;
+    try { TTS.pick(); const u = new SpeechSynthesisUtterance('。'); u.lang = 'zh-CN'; u.volume = 0; if (TTS.voice) u.voice = TTS.voice; speechSynthesis.speak(u); } catch (e) {}
   }
 
   /* ═════════ 홈 ═════════ */
@@ -507,6 +535,7 @@
       const enable = () => later(() => { sb.disabled = false; }, 500);
       ACT.play = () => speakBtn(spk, it.zh, enable);
       later(() => speakBtn(spk, it.zh, enable), 350);
+      later(() => { sb.disabled = false; }, 4000);
       ACT.said = () => { fx('ok'); trace(it); };
     }
     function trace(it) {
@@ -757,9 +786,12 @@
     openModal(`<h2>선생님 창구</h2>
       <ul class="rules">${rows}</ul>
       <p style="font-size:1rem">학생: <b style="font-weight:400;color:var(--ink)">${esc(S.name)}</b></p>
+      <div class="tipbox" style="font-size:.95rem">중국어 음성: <b>${TTS.voice ? esc(TTS.voice.name) : '찾지 못함'}</b>
+        <button class="btn white" style="margin-top:.4rem;width:100%;font-size:1.05rem;padding:.5rem" data-act="test">${ic('u-speaker')} 소리 시험 「你好！」</button></div>
       <button class="btn orange" data-act="newkid">새 학생으로 시작 (기록 지우기)</button>
       <button class="btn white" data-act="x">닫기</button>`, {
       x: closeModal, _outside: closeModal,
+      test() { if (!S.sound) { S.sound = true; save(); renderSoundBtn(); } fx('ok'); TTS.speak('你好！欢迎来到汉字侦探团。'); },
       newkid() {
         openModal(`<h2>정말 지울까요?</h2><p>${esc(S.name)} 학생의 도장과 기록이<br>이 기기에서 모두 지워져요.</p>
           <div class="row"><button class="btn white" data-act="x">취소</button><button class="btn" style="--c:var(--red);--deep:#C23940" data-act="go">지우기</button></div>`,

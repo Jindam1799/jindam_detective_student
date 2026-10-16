@@ -1,5 +1,5 @@
 /* 한자어 탐정단 서비스워커: 온라인이면 최신 파일, 오프라인이면 저장해 둔 파일 */
-const CACHE = 'hanja-tamjeong-v1-20261016';
+const CACHE = 'hanja-tamjeong-v1-20261016b';
 const FILES = ['./', 'index.html', 'style.css', 'data.js', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-64.png'];
 
