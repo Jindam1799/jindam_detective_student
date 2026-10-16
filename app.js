@@ -26,9 +26,9 @@
   function load() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY));
-      if (d && d.v === 1) return Object.assign({ v: 1, name: '', prog: {}, ok: {}, sound: true }, d);
+      if (d && d.v === 1) return Object.assign({ v: 1, name: '', prog: {}, ok: {}, bonus: {}, sound: true }, d);
     } catch (e) {}
-    return { v: 1, name: '', prog: {}, ok: {}, sound: true };
+    return { v: 1, name: '', prog: {}, ok: {}, bonus: {}, sound: true };
   }
   let S = load();
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
@@ -291,6 +291,7 @@
           <button class="say" data-act="say" data-k="1">${ic('u-speaker')}</button></div>
       </div>
       <div class="path">${tiles}${certTile}</div>
+      ${bonusBar(L, ready)}
     </section>`);
     ACT.say = b => speakBtn(null, d[+b.dataset.k].zh);
     ACT.mission = b => {
@@ -302,6 +303,21 @@
       if (!ready) { fx('no'); toast('미션 5개를 모두 풀면 도장 카드가 열려요!'); return; }
       fx('tap'); showCert(id);
     };
+    ACT.bonus = () => {
+      if (!ready) { fx('no'); toast('미션 5개를 모두 풀면 보상 게임이 열려요!'); return; }
+      fx('tap'); openCardRules(L);
+    };
+  }
+
+  /* 사건 지도 아래 「보상 게임」 줄 */
+  function bonusBar(L, ready) {
+    const b = (S.bonus || {})[L.id];
+    const sub = !ready ? '미션 5개를 다 풀면 열려요'
+      : b ? `최고 기록 · 뒤집기 ${b.best}번` : '보상이 열렸어요! 눌러서 시작';
+    return `<button class="bonus ${ready ? 'ready' : 'locked'}${ready && !b ? ' fresh' : ''}" data-act="bonus">
+      <span class="b-ic">${ic('i-cards')}</span>
+      <span class="b-t"><b>보상 게임 · 짝꿍 카드</b><small>${sub}</small></span>
+      ${ready ? (b ? starRow(b.stars) : '') : ic('u-lock', 'b-lk')}</button>`;
   }
 
   function openRules(L, i) {
@@ -337,6 +353,7 @@
   function finish(L, key, miss, tipHtml, extra) {
     const stars = starsFor(miss);
     const p = prog(L.id);
+    const wasDone = allDone(L.id);
     const old = p[key];
     p[key] = { stars: Math.max(stars, old ? old.stars : 0), at: Date.now() };
     save();
@@ -351,6 +368,7 @@
       <h2>${MISSIONS[i].name}</h2>
       <div class="stars-big">${[1, 2, 3].map(k => `<svg class="${k <= stars ? 'on' : ''}"><use href="#u-star"/></svg>`).join('')}</div>
       <p>${msg}${extra ? '<br>' + extra : ''}</p>
+      ${!wasDone && allDone(L.id) ? `<div class="unlock-note">${ic('i-cards')}<span>보상 게임 <b>「짝꿍 카드」</b>가 열렸어요!</span></div>` : ''}
       ${tipHtml ? `<div class="tipbox">${tipHtml}</div>` : ''}
       <div class="row"><button class="btn white" data-act="map">사건 지도</button>${nextBtn}</div>`,
     {
@@ -735,6 +753,102 @@
     next();
   };
 
+
+  /* ═════════ 보상 게임: 짝꿍 카드 뒤집기 ═════════
+   * data.js 각 사건의 pairs(우리말 ↔ 중국어) 6쌍 = 카드 12장
+   * 처음 3초 동안 모두 보여 주고 뒤집음 → 두 장씩 뒤집어 짝 찾기
+   * 중국어 카드를 뒤집으면 소리, 짝을 맞히면 다시 한 번 소리
+   * 별: 뒤집기 9번 이하 ★3 / 13번 이하 ★2 / 그 이상 ★1
+   */
+  function openCardRules(L) {
+    const b = (S.bonus || {})[L.id];
+    const ex = L.pairs[0];
+    openModal(`<div class="ic">${ic('i-cards')}</div>
+      <h2>보상 게임 · 짝꿍 카드</h2>
+      <ul class="rules">
+        <li><b>1</b>처음 3초 동안 카드를 잘 기억해요.</li>
+        <li><b>2</b><span>두 장씩 뒤집어 짝을 찾아요.<br><span class="zh">${ex.zh}</span> ↔ ${esc(ex.ko)}</span></li>
+        <li><b>3</b>적게 뒤집을수록 별이 많아요!</li>
+      </ul>
+      ${b ? `<p>최고 기록 · 뒤집기 <b style="font-weight:400;color:var(--deep)">${b.best}번</b></p>` : ''}
+      <div class="row"><button class="btn white" data-act="no">나중에</button><button class="btn big" data-act="go">시작!</button></div>`,
+    { no: closeModal, _outside: closeModal, go() { closeModal(); fx('tap'); unlockSpeech(); RUN.cards(L); } });
+  }
+  function cardFace(c) {
+    const p = c.p;
+    if (c.t === 'zh') return `<span class="zh">${p.zh}</span><span class="py">${p.py}</span>`;
+    if (/^\d+$/.test(p.ko)) return `<span class="num">${p.ko}</span><span class="rd">${esc(p.read || '')}</span>`;
+    return `${p.pic ? ic('i-' + p.pic, 'pic') : ''}<span class="ko">${esc(p.ko)}</span>`;
+  }
+  RUN.cards = function (L) {
+    newScreen(); setTheme(L);
+    header({ back: 'quit', prog: '짝꿍 카드' });
+    ACT.quit = () => { fx('tap'); showLesson(L.id); };
+    const pairs = L.pairs;
+    const deck = shuffle(pairs.flatMap((p, n) => [{ n, t: 'zh', p }, { n, t: 'ko', p }]));
+    const best = ((S.bonus || {})[L.id] || {}).best;
+    let open = [], matched = 0, moves = 0, lock = true;
+    render(`<section class="screen play cards-screen">
+      <div class="cards-info"><span id="cmsg" class="cmsg">잘 기억해요! <b id="cnt">3</b></span>
+        <span class="cmv">뒤집기 <b id="mv">0</b>번${best ? `<small> · 최고 ${best}번</small>` : ''}</span></div>
+      <div class="cards">${deck.map((c, k) => `<button class="card open" data-act="flip" data-k="${k}">
+        <span class="card-in"><span class="face back">${ic('i-magnifier')}</span>
+        <span class="face front ${c.t}">${cardFace(c)}</span></span></button>`).join('')}</div>
+    </section>`);
+    const cards = [...document.querySelectorAll('.card')];
+    const cmsg = $('#cmsg');
+    const msg = (h, cls = '') => { cmsg.className = 'cmsg ' + cls; cmsg.innerHTML = h; };
+    setProg(`짝꿍 카드 0/${pairs.length}`, 0);
+    [2, 1].forEach((n, i) => later(() => { const c = $('#cnt'); if (c) c.textContent = n; }, (i + 1) * 1000));
+    later(() => {
+      cards.forEach(c => c.classList.remove('open'));
+      lock = false; fx('tap');
+      msg('카드 두 장을 뒤집어 짝을 찾아요!');
+    }, 3000);
+    ACT.flip = el => {
+      if (lock) return;
+      const k = +el.dataset.k, c = deck[k];
+      if (el.classList.contains('open') || el.classList.contains('done')) return;
+      el.classList.add('open'); fx('tap');
+      if (c.t === 'zh') TTS.speak(c.p.zh);
+      open.push(k);
+      if (open.length < 2) return;
+      const [a, b] = open; open = [];
+      moves++; $('#mv').textContent = moves; lock = true;
+      if (deck[a].n === deck[b].n) {
+        const p = deck[a].p;
+        later(() => {
+          cards[a].classList.add('done'); cards[b].classList.add('done');
+          matched++; fx('ok'); TTS.speak(p.zh);
+          msg(`짝! ${esc(p.ko)} = <span class="zh">${p.zh}</span>`, 'good');
+          setProg(`짝꿍 카드 ${matched}/${pairs.length}`, matched / pairs.length);
+          lock = false;
+          if (matched === pairs.length) { lock = true; later(done, 1300); }
+        }, 450);
+      } else {
+        later(() => { fx('no'); msg('짝이 아니에요. 잘 기억해 두세요!', 'bad'); }, 450);
+        later(() => { cards[a].classList.remove('open'); cards[b].classList.remove('open'); lock = false; }, 1300);
+      }
+    };
+    function done() {
+      const n = pairs.length;
+      const stars = moves <= n + 3 ? 3 : moves <= n + 7 ? 2 : 1;
+      S.bonus = S.bonus || {};
+      const old = S.bonus[L.id];
+      const isBest = !old || moves < old.best;
+      S.bonus[L.id] = { best: old ? Math.min(old.best, moves) : moves, stars: Math.max(stars, old ? old.stars : 0), at: Date.now() };
+      save();
+      fx('win'); confetti();
+      openModal(`<div class="stamp-big" style="font-size:1.7rem">짝꿍<br>완성!</div>
+        <h2>뒤집기 ${moves}번</h2>
+        <div class="stars-big">${[1, 2, 3].map(k => `<svg class="${k <= stars ? 'on' : ''}"><use href="#u-star"/></svg>`).join('')}</div>
+        <p>${isBest && old ? '최고 기록을 깼어요!' : stars === 3 ? '기억력 탐정이에요!' : '다시 하면 더 적게 뒤집을 수 있어요!'}</p>
+        <div class="tipbox">짝꿍을 소리 내어 말해 봐요!<br>${pairs.slice(0, 3).map(p => `${esc(p.ko)} → <span class="zh">${p.zh}</span>`).join(' · ')}</div>
+        <div class="row"><button class="btn white" data-act="map">사건 지도</button><button class="btn big" data-act="again">다시 하기</button></div>`,
+      { map() { showLesson(L.id); }, again() { RUN.cards(L); } });
+    }
+  };
+
   /* ═════════ 도장 카드 (선생님 확인) ═════════ */
   function showCert(id) {
     const L = lessonById(id); if (!L || !allDone(id)) return showLesson(id);
@@ -809,7 +923,7 @@
   function teacherMenu() {
     const rows = LESSONS.map(L => {
       const n = doneCount(L.id), ok = S.ok[L.id];
-      return `<li><b style="background:${L.color}">${L.no}</b>${esc(L.title)} · 미션 ${n}/5 ${ok ? '· 확인 ✔' : ''}</li>`;
+      return `<li><b style="background:${L.color}">${L.no}</b>${esc(L.title)} · 미션 ${n}/5 ${ok ? '· 확인 ✔' : ''}${S.bonus && S.bonus[L.id] ? ` · 카드 ${S.bonus[L.id].best}번` : ''}</li>`;
     }).join('');
     openModal(`<h2>선생님 창구</h2>
       <ul class="rules">${rows}</ul>
@@ -823,7 +937,7 @@
       newkid() {
         openModal(`<h2>정말 지울까요?</h2><p>${esc(S.name)} 학생의 도장과 기록이<br>이 기기에서 모두 지워져요.</p>
           <div class="row"><button class="btn white" data-act="x">취소</button><button class="btn" style="--c:var(--red);--deep:#C23940" data-act="go">지우기</button></div>`,
-        { x: closeModal, _outside: closeModal, go() { const snd = S.sound; S = { v: 1, name: '', prog: {}, ok: {}, sound: snd }; save(); showIntro(); } });
+        { x: closeModal, _outside: closeModal, go() { const snd = S.sound; S = { v: 1, name: '', prog: {}, ok: {}, bonus: {}, sound: snd }; save(); showIntro(); } });
       }
     });
   }

@@ -60,6 +60,14 @@ const LESSONS = [
       { zh: '在', py: 'zài', ko: '~에 있다' }
     ],
     wordTip: '在 zài = 있을 재 (재학생의 「재」) → 我在学校。',
+    pairs: [ // 보상 게임 짝꿍 카드 (우리말 ↔ 중국어 6쌍)
+      { zh: '学校', py: 'xuéxiào', ko: '학교', pic: 'school' },
+      { zh: '教室', py: 'jiàoshì', ko: '교실', pic: 'classroom' },
+      { zh: '图书馆', py: 'túshūguǎn', ko: '도서관', pic: 'library' },
+      { zh: '食堂', py: 'shítáng', ko: '급식실', pic: 'tray' },
+      { zh: '家', py: 'jiā', ko: '집', pic: 'house' },
+      { zh: '学生', py: 'xuésheng', ko: '학생', pic: 'people' }
+    ],
     react: {
       q: '你在哪里？', qpy: 'Nǐ zài nǎlǐ?', qko: '너는 어디에 있니?',
       items: [
@@ -127,6 +135,14 @@ const LESSONS = [
       { zh: '九', py: 'jiǔ', ko: '9' }, { zh: '十', py: 'shí', ko: '10' }
     ],
     wordTip: '날짜를 말할 때는 日가 아니라 号 hào! → 五月八号 5월 8일',
+    pairs: [ // 보상 게임 짝꿍 카드 (숫자 ↔ 중국어 6쌍)
+      { zh: '三', py: 'sān', ko: '3', read: '삼' },
+      { zh: '五', py: 'wǔ', ko: '5', read: '오' },
+      { zh: '八', py: 'bā', ko: '8', read: '팔' },
+      { zh: '十', py: 'shí', ko: '10', read: '십' },
+      { zh: '二十', py: 'èr shí', ko: '20', read: '이십' },
+      { zh: '生日', py: 'shēngrì', ko: '생일', pic: 'cake' }
+    ],
     react: {
       q: '你的生日是几月几号？', qpy: 'Nǐ de shēngrì shì jǐ yuè jǐ hào?', qko: '너의 생일은 몇 월 며칠이니?',
       frame: '我的生日是',
@@ -187,6 +203,14 @@ const LESSONS = [
       { zh: '出口', py: 'chūkǒu', ko: '출구' }
     ],
     wordTip: '화장실은 化妆室가 아니라 洗手间 xǐshǒujiān! → 洗手间在哪里？',
+    pairs: [ // 보상 게임 짝꿍 카드 (우리말 ↔ 중국어 6쌍)
+      { zh: '银行', py: 'yínháng', ko: '은행', pic: 'bank' },
+      { zh: '医院', py: 'yīyuàn', ko: '병원', pic: 'hospital' },
+      { zh: '公园', py: 'gōngyuán', ko: '공원', pic: 'park' },
+      { zh: '书店', py: 'shūdiàn', ko: '서점', pic: 'bookstore' },
+      { zh: '市场', py: 'shìchǎng', ko: '시장', pic: 'market' },
+      { zh: '出口', py: 'chūkǒu', ko: '출구', pic: 'exit' }
+    ],
     react: {
       q: '这是什么？', qpy: 'Zhè shì shénme?', qko: '이건 뭐예요?',
       items: [
