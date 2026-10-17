@@ -38,7 +38,7 @@
   function newScreen() {
     token++; timers.forEach(clearTimeout); intervals.forEach(clearInterval); cancelAnimationFrame(raf);
     timers = []; intervals = [];
-    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    TTS.stop();
     ACT = {}; closeModal();
   }
   function guard(fn) { const t = token; return (...a) => { if (t === token) fn(...a); }; }
@@ -70,7 +70,7 @@
   /* ───────── 클릭 처리 (한 곳에서) ───────── */
   let ACT = {}, MACT = {};
   const GLOBAL = {
-    sound() { S.sound = !S.sound; save(); if (!S.sound && 'speechSynthesis' in window) speechSynthesis.cancel(); renderSoundBtn(); fx('tap'); toast(S.sound ? '소리 켜짐' : '소리 꺼짐 (다시 누르면 켜져요)'); if (S.sound) TTS.speak('你好'); },
+    sound() { S.sound = !S.sound; save(); if (!S.sound) TTS.stop(); renderSoundBtn(); fx('tap'); toast(S.sound ? '소리 켜짐' : '소리 꺼짐 (다시 누르면 켜져요)'); if (S.sound) TTS.speak('你好'); },
     home() { fx('tap'); showHome(); },
     gear() { fx('tap'); askPin(() => teacherMenu()); }
   };
@@ -134,7 +134,15 @@
     count: 0, cur: null, warned: false,
     speak(text, onend, rate = .8) {
       const fin = onend ? guard(onend) : null;
-      if (!('speechSynthesis' in window) || !S.sound) { if (fin) later(fin, 400); return; }
+      if (!S.sound) { if (fin) later(fin, 400); return; }
+      let done = false;
+      const end = () => { if (done) return; done = true; document.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); if (fin) fin(); };
+      // 1순위: 미리 녹음한 소리 파일 (모든 기기에서 같은 목소리, 기기 음성이 없어도 소리 남)
+      CLIP.play(text, end).then(ok => { if (!ok && !done) this.device(text, end, rate); });
+    },
+    device(text, end, rate) {
+      // 2순위: 기기 내장 음성 (녹음 파일이 없는 문장만)
+      if (!('speechSynthesis' in window)) { later(end, 400); return; }
       if (!this.voice) this.pick();
       if (this.count && !this.voice) noVoiceHelp();
       const ss = speechSynthesis;
@@ -143,16 +151,68 @@
       u.lang = 'zh-CN'; u.rate = rate; u.pitch = 1.05;
       try { if (this.voice) u.voice = this.voice; } catch (e) { this.voice = null; }
       this.cur = u; // 크롬: 참조가 없으면 소리가 중간에 사라지는 문제 방지
-      let done = false;
-      const end = () => { if (done) return; done = true; document.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); if (fin) fin(); };
       u.onend = end;
       u.onerror = e => { if (e && e.error === 'not-allowed') toast('화면을 한 번 누르면 소리가 나요!'); end(); };
       later(end, 1500 + text.length * 520);
-      // 크롬 데스크톱: cancel 직후 바로 speak 하면 소리가 씹히는 문제 → 잠깐 쉬고 말하기
       const tk = token;
       setTimeout(() => { if (tk !== token) return; try { ss.resume(); ss.speak(u); } catch (e) { end(); } }, 60);
+    },
+    stop() { CLIP.stop(); if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+  };
+
+  /* ───────── 녹음 소리 파일 재생 (Web Audio) ─────────
+   * audio/list.js 의 AUDIO_LIST = { '중국어 문장': '파일이름' } → audio/파일이름.mp3
+   * 한 번 받은 소리는 기억해 두고, 서비스워커가 오프라인용으로도 저장함
+   */
+  const CLIP = {
+    buf: new Map(), src: null,
+    has(text) { return !!(window.AUDIO_LIST && AUDIO_LIST[text]); },
+    load(text) {
+      if (!this.has(text)) return Promise.resolve(null);
+      if (!this.buf.has(text)) {
+        const c = audio();
+        const p = fetch('audio/' + AUDIO_LIST[text] + '.mp3')
+          .then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+          .then(ab => c ? new Promise((ok, no) => c.decodeAudioData(ab, ok, no)) : null)
+          .catch(() => { this.buf.delete(text); return null; });
+        this.buf.set(text, p);
+      }
+      return this.buf.get(text);
+    },
+    preload(list) { list.forEach(t => this.load(t)); },
+    stop() { if (this.src) { try { this.src.onended = null; this.src.stop(); } catch (e) {} this.src = null; } },
+    play(text, end) {
+      const c = audio();
+      if (!c || !this.has(text)) return Promise.resolve(false);
+      if ('speechSynthesis' in window) speechSynthesis.cancel();
+      this.stop();
+      const tk = token;
+      return this.load(text).then(b => {
+        if (!b) return false;
+        if (tk !== token) return true;
+        if (c.state === 'suspended') c.resume();
+        const s = c.createBufferSource(), g = c.createGain();
+        g.gain.value = 1.0;
+        s.buffer = b; s.connect(g).connect(c.destination);
+        s.onended = () => { if (this.src === s) this.src = null; end(); };
+        this.src = s; s.start();
+        later(end, b.duration * 1000 + 1200);   // 혹시 onended가 안 와도 진행
+        return true;
+      });
     }
   };
+  // 아이폰 무음 스위치가 켜져 있어도 소리가 나게 (사파리 17 이상)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  // 처음 손가락·마우스로 누를 때 소리 장치 깨우기 (아이폰·크롬 자동재생 규칙)
+  ['pointerdown', 'touchend', 'keydown'].forEach(ev => document.addEventListener(ev, () => { const c = audio(); if (c && c.state !== 'running') c.resume(); }, { passive: true, capture: true }));
+  function lessonTexts(L) {
+    const t = new Set();
+    L.dialog.forEach(d => t.add(d.zh)); L.sound.items.forEach(x => t.add(x.zh)); L.chars.forEach(c => t.add(c.s));
+    L.words.forEach(w => t.add(w.zh)); (L.pairs || []).forEach(p => t.add(p.zh)); t.add(L.react.q);
+    (L.react.items || []).forEach(x => t.add(x.a));
+    return [...t];
+  }
+
   if ('speechSynthesis' in window) {
     TTS.pick();
     if (speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', () => TTS.pick());
@@ -265,6 +325,7 @@
     const L = lessonById(id); if (!L) return showHome();
     newScreen(); setTheme(L);
     header({ back: 'home', title: `사건 ${L.no} · ${L.title}` });
+    CLIP.preload(lessonTexts(L));
     const p = prog(id);
     let nextFound = false;
     const tiles = MISSIONS.map((m, i) => {
@@ -928,7 +989,7 @@
     openModal(`<h2>선생님 창구</h2>
       <ul class="rules">${rows}</ul>
       <p style="font-size:1rem">학생: <b style="font-weight:400;color:var(--ink)">${esc(S.name)}</b></p>
-      <div class="tipbox" style="font-size:.95rem">중국어 음성: <b>${TTS.voice ? esc(TTS.voice.name) : '찾지 못함'}</b>
+      <div class="tipbox" style="font-size:.95rem">녹음 소리 <b>${window.AUDIO_LIST ? Object.keys(AUDIO_LIST).length + '개' : '없음'}</b> · 기기 음성 <b>${TTS.voice ? esc(TTS.voice.name) : '없음'}</b>
         <button class="btn white" style="margin-top:.4rem;width:100%;font-size:1.05rem;padding:.5rem" data-act="test">${ic('u-speaker')} 소리 시험 「你好！」</button></div>
       <button class="btn orange" data-act="newkid">새 학생으로 시작 (기록 지우기)</button>
       <button class="btn white" data-act="x">닫기</button>`, {
@@ -942,20 +1003,12 @@
     });
   }
 
-  /* ───────── 인앱 브라우저 (카카오톡 등) ───────── */
-  (function inApp() {
-    const ua = navigator.userAgent || '';
-    if (/KAKAOTALK/i.test(ua)) {
-      location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(location.href);
-    } else if (/(Instagram|NAVER|Line\/|FBAN|FBAV|DaumApps|everytimeApp|MicroMessenger)/i.test(ua)) {
-      setTimeout(() => toast('소리가 안 나면 크롬이나 사파리로 열어 주세요!', 4500), 800);
-    }
-  })();
+  /* 인앱 브라우저(카카오톡 등) → 크롬으로 열기: lib/open-in-chrome.js */
 
   /* ───────── 시작 ───────── */
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
-  window.__HT = { RUN, showLesson, showCert, showHome, get S() { return S; } }; // 테스트용
+  window.__HT = { RUN, showLesson, showCert, showHome, CLIP, TTS, get S() { return S; } }; // 테스트용
   S.name ? showHome() : showIntro();
 })();
