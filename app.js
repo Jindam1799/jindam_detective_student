@@ -119,45 +119,68 @@
 
   /* ───────── 중국어 음성 (TTS) ───────── */
   const TTS = {
-    voice: null,
+    voice: null, count: 0, cur: null, warned: false, last: '', tries: 0,
+    isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent) || (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1),
     pick() {
       if (!('speechSynthesis' in window)) return;
       const vs = speechSynthesis.getVoices();
-      const zh = vs.filter(v => /^(zh[-_](CN|Hans)|cmn)/i.test(v.lang));
-      const any = vs.filter(v => /^zh/i.test(v.lang));
-      const fem = /(Tingting|Ting-Ting|Xiaoxiao|Xiaoyi|Xiaohan|Huihui|Yaoyao|Lili|Shanshan|female|女)/i;
-      // 엣지 자연 음성(Xiaoxiao Online) → 여성 음성 → 구글 중국어 → 아무 중국어
-      this.voice = zh.find(v => /Natural|Online/i.test(v.name) && fem.test(v.name)) || zh.find(v => fem.test(v.name))
-        || zh.find(v => /Google/i.test(v.name)) || zh[0] || any[0] || null;
       this.count = vs.length;
+      const L = v => (v.lang || '').replace('_', '-').toLowerCase();
+      const cn = vs.filter(v => /^(zh-cn|zh-hans|cmn)/.test(L(v)) || L(v) === 'zh');
+      const tw = vs.filter(v => /^zh-tw/.test(L(v)));          // 대만 표준어 (광둥어 zh-HK는 제외)
+      const fem = /(Tingting|Ting-Ting|Meijia|Xiaoxiao|Xiaoyi|Xiaohan|Xiaomo|Huihui|Yaoyao|Lili|Shanshan|Yu-shu|female|女)/i;
+      // 다른 프로그램과 같은 순서: 기기에 깔린 중국어 여성 음성(맥 Tingting·윈도우 Huihui) → 엣지 자연 음성 → 구글 普通话 → 아무 중국어
+      this.voice = cn.find(v => v.localService && fem.test(v.name))
+        || cn.find(v => /Natural|Online/i.test(v.name) && fem.test(v.name))
+        || cn.find(v => /Google/i.test(v.name))
+        || cn.find(v => fem.test(v.name)) || cn[0]
+        || tw.find(v => fem.test(v.name)) || tw[0] || null;
     },
-    count: 0, cur: null, warned: false,
     speak(text, onend, rate = .8) {
       const fin = onend ? guard(onend) : null;
       if (!S.sound) { if (fin) later(fin, 400); return; }
       let done = false;
-      const end = () => { if (done) return; done = true; document.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); if (fin) fin(); };
-      // 1순위: 미리 녹음한 소리 파일 (모든 기기에서 같은 목소리, 기기 음성이 없어도 소리 남)
-      CLIP.play(text, end).then(ok => { if (!ok && !done) this.device(text, end, rate); });
+      const end = () => { if (done) return; done = end.done = true; document.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); if (fin) fin(); };
+      // 1순위: 녹음 파일(audio/list.js에 있는 문장만), 2순위: 기기 음성
+      if (CLIP.has(text) && audio()) CLIP.play(text, end).then(ok => { if (!ok && !done) this.device(text, end, rate); });
+      else this.device(text, end, rate);   // 누른 순간에 바로 말하기 (크롬 자동재생 규칙)
     },
-    device(text, end, rate) {
-      // 2순위: 기기 내장 음성 (녹음 파일이 없는 문장만)
+    device(text, end, rate, retry) {
       if (!('speechSynthesis' in window)) { later(end, 400); return; }
+      const ss = speechSynthesis;
       if (!this.voice) this.pick();
       if (this.count && !this.voice) noVoiceHelp();
-      const ss = speechSynthesis;
-      ss.cancel();
+      // 앞 소리가 나고 있을 때만 멈춤 (크롬은 '멈춤' 직후의 새 소리까지 지워 버리는 버그가 있음)
+      const busy = ss.speaking || ss.pending;
+      if (busy) ss.cancel();
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN'; u.rate = rate; u.pitch = 1.05;
-      try { if (this.voice) u.voice = this.voice; } catch (e) { this.voice = null; }
-      this.cur = u; // 크롬: 참조가 없으면 소리가 중간에 사라지는 문제 방지
-      u.onend = end;
-      u.onerror = e => { if (e && e.error === 'not-allowed') toast('화면을 한 번 누르면 소리가 나요!'); end(); };
-      later(end, 1500 + text.length * 520);
-      const tk = token;
-      setTimeout(() => { if (tk !== token) return; try { ss.resume(); ss.speak(u); } catch (e) { end(); } }, 60);
+      u.lang = 'zh-CN'; u.rate = rate;
+      if (this.voice && !retry) { try { u.voice = this.voice; u.lang = this.voice.lang; } catch (e) {} }
+      this.cur = u;   // 크롬: 참조가 없으면 소리가 중간에 사라지는 문제 방지
+      let started = false;
+      u.onstart = () => { started = true; this.last = '재생됨 · ' + (u.voice ? u.voice.name : u.lang); };
+      u.onend = () => { started = true; end(); };
+      u.onerror = e => {
+        const er = (e && e.error) || 'error';
+        this.last = '오류 · ' + er;
+        if (er === 'interrupted' || er === 'canceled') return end();
+        if (er === 'not-allowed') toast('화면을 한 번 누르면 소리가 나요!');
+        if (!retry && er !== 'not-allowed') return this.device(text, end, rate, true);   // 목소리 지정 없이 한 번 더
+        end();
+      };
+      const go = () => {
+        try { ss.speak(u); } catch (e) { end(); return; }
+        // 1.8초 안에 소리가 시작되지 않으면 크롬 음성 엔진이 멈춘 것 → 한 번 깨워서 다시
+        later(() => {
+          if (started || end.done) return;
+          if (!retry) { try { ss.cancel(); } catch (e) {} setTimeout(() => { if (!end.done) this.device(text, end, rate, true); }, 120); }
+          else { this.last = '소리가 시작되지 않음'; end(); }
+        }, 1800);
+        later(end, 2500 + text.length * 600);
+      };
+      if (busy) setTimeout(go, 80); else go();
     },
-    stop() { CLIP.stop(); if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+    stop() { CLIP.stop(); if ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel(); }
   };
 
   /* ───────── 녹음 소리 파일 재생 (Web Audio) ─────────
@@ -184,7 +207,7 @@
     play(text, end) {
       const c = audio();
       if (!c || !this.has(text)) return Promise.resolve(false);
-      if ('speechSynthesis' in window) speechSynthesis.cancel();
+      if ('speechSynthesis' in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
       this.stop();
       const tk = token;
       return this.load(text).then(b => {
@@ -220,12 +243,12 @@
   }
   function noVoiceHelp() {
     if (TTS.warned) return; TTS.warned = true;
-    const win = /Windows/i.test(navigator.userAgent);
+    const win = /Windows/i.test(navigator.userAgent), whale = /Whale/i.test(navigator.userAgent);
     openModal(`<div class="ic">${ic('u-speaker')}</div><h2>중국어 목소리가 없어요</h2>
-      <p>이 기기·브라우저에는 중국어 음성이 없어서<br>소리가 나지 않아요.</p>
-      <div class="tipbox">${win
+      <p>이 브라우저에는 중국어 음성이 없어서<br>소리가 나지 않아요.</p>
+      <div class="tipbox">${whale ? '네이버 웨일에는 중국어 음성이 없어요.<br>' : ''}${win
         ? '① <b>크롬</b>이나 <b>엣지</b>로 열어 주세요. (가장 쉬워요)<br>② 또는 윈도우 <b>설정 → 시간 및 언어 → 언어</b>에서 <b>중국어(간체, 중국)</b>를 추가하고 음성을 받아 주세요.'
-        : '<b>크롬</b>이나 <b>사파리</b>로 열어 주세요.<br>그래도 안 되면 기기 설정에서 중국어 음성을 받아 주세요.'}</div>
+        : '<b>크롬</b>이나 <b>사파리</b>로 열어 주세요.'}</div>
       <button class="btn big" data-act="x">알겠어요</button>`, { x: closeModal, _outside: closeModal });
   }
   function speakBtn(btn, text, onend) { if (btn) btn.classList.add('playing'); TTS.speak(text, onend); }
@@ -283,10 +306,12 @@
   }
   function unlockSpeech() {
     audio();
-    // 아이폰·아이패드: 첫 소리는 손가락 터치 순간에 한 번 내야 이후 소리가 남 (조용한 '。' 한 번)
+    // 아이폰·아이패드: 첫 소리는 손가락 터치 순간에 한 번 내야 이후 소리가 남
     if (unlockSpeech.done || !('speechSynthesis' in window)) return;
     unlockSpeech.done = true;
-    try { TTS.pick(); const u = new SpeechSynthesisUtterance('。'); u.lang = 'zh-CN'; u.volume = 0; if (TTS.voice) u.voice = TTS.voice; speechSynthesis.speak(u); } catch (e) {}
+    TTS.pick();
+    if (!TTS.isIOS) return;   // 데스크톱 크롬에서는 이 조용한 소리가 음성 엔진을 멈춰 세울 수 있어 아이폰·아이패드에서만
+    try { const u = new SpeechSynthesisUtterance(' '); u.lang = 'zh-CN'; u.volume = 0; speechSynthesis.speak(u); } catch (e) {}
   }
 
   /* ═════════ 홈 ═════════ */
@@ -989,12 +1014,19 @@
     openModal(`<h2>선생님 창구</h2>
       <ul class="rules">${rows}</ul>
       <p style="font-size:1rem">학생: <b style="font-weight:400;color:var(--ink)">${esc(S.name)}</b></p>
-      <div class="tipbox" style="font-size:.95rem">녹음 소리 <b>${window.AUDIO_LIST ? Object.keys(AUDIO_LIST).length + '개' : '없음'}</b> · 기기 음성 <b>${TTS.voice ? esc(TTS.voice.name) : '없음'}</b>
-        <button class="btn white" style="margin-top:.4rem;width:100%;font-size:1.05rem;padding:.5rem" data-act="test">${ic('u-speaker')} 소리 시험 「你好！」</button></div>
+      <div class="tipbox" style="font-size:.95rem">중국어 음성 <b id="vname">${TTS.voice ? esc(TTS.voice.name) : '없음'}</b> <small style="color:var(--sub)">(전체 음성 ${TTS.count}개)</small>
+        <div id="vstat" style="font-size:.85rem;color:var(--sub);min-height:1.2em"></div>
+        <button class="btn white" style="margin-top:.3rem;width:100%;font-size:1.05rem;padding:.5rem" data-act="test">${ic('u-speaker')} 소리 시험 「你好！」</button></div>
       <button class="btn orange" data-act="newkid">새 학생으로 시작 (기록 지우기)</button>
       <button class="btn white" data-act="x">닫기</button>`, {
       x: closeModal, _outside: closeModal,
-      test() { if (!S.sound) { S.sound = true; save(); renderSoundBtn(); } fx('ok'); TTS.speak('你好！欢迎来到汉字侦探团。'); },
+      test() {
+        if (!S.sound) { S.sound = true; save(); renderSoundBtn(); }
+        TTS.pick(); const vn = $('#vname'); if (vn) vn.textContent = TTS.voice ? TTS.voice.name : '없음';
+        const st = $('#vstat'); TTS.last = ''; if (st) st.textContent = '읽는 중…';
+        TTS.speak('你好！欢迎来到汉字侦探团。', () => { if (st) st.textContent = TTS.last || '끝'; });
+        setTimeout(() => { if (st && st.textContent === '읽는 중…') st.textContent = TTS.last || '아직 소리가 시작되지 않았어요'; }, 2500);
+      },
       newkid() {
         openModal(`<h2>정말 지울까요?</h2><p>${esc(S.name)} 학생의 도장과 기록이<br>이 기기에서 모두 지워져요.</p>
           <div class="row"><button class="btn white" data-act="x">취소</button><button class="btn" style="--c:var(--red);--deep:#C23940" data-act="go">지우기</button></div>`,
